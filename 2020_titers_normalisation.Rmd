@@ -1,0 +1,197 @@
+---
+title: "2020 Ab titer data: Median (at Day 0) based normalisation"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r echo=FALSE}
+packages <- c("tidyverse", "hrbrthemes", "jsonlite")
+
+for (n in 1:length(packages)) {
+    suppressMessages(library(packages[n], character.only = TRUE))
+}
+
+```
+
+### Reading dataset from experimental datafile
+```{r}
+setwd("/home/pramod/Documents/GitHub/2021-Ab-titer-data-normalisation")
+data_2020_metadata <- read_csv("metadata_cmipb_2020.csv")
+
+json_subject <- fromJSON("subject.json") 
+json_specimen <- fromJSON("specimen.json")
+subject_specimen  <- left_join(json_specimen, json_subject) %>%
+  dplyr::select(specimen_id, subject_id, planned_day_relative_to_boost)
+
+titers_2020 <- read_csv("2020LD_ab_titer.csv") %>%
+  left_join(subject_specimen) %>%
+  mutate(
+    antigen = replace(antigen, antigen =='1% PFA PT', 'PT'),
+    isotype_antigen = paste0(isotype,"_",antigen, "_", unit),
+    ab_titer_original = ab_titer, ## Kepping ab)titer_original for final dataframe
+  ) 
+
+```
+### Count NA and below LOD samples per Isotype and Antigen pair 
+### Remove features with more than 80% missing values
+```{r}
+count_samples <- titers_2020 %>%
+  group_by(isotype_antigen) %>%
+  summarise(count_samples = n())
+
+count_0 <- titers_2020 %>%
+  group_by(isotype_antigen) %>%
+  filter(is.na(ab_titer) == TRUE | ab_titer < lower_limit_of_detection) %>%
+  summarise(count_0 = n(), percentage_0 = (count_0/394)* 100) %>%
+  arrange(desc(percentage_0))
+  
+count_0
+
+remove_features <- count_0[count_0$percentage_0 > 80,]$isotype_antigen
+titers_2020_feature_removed <- titers_2020[!titers_2020$isotype_antigen %in% remove_features, ]
+```
+### Replace not detechetd values with lower_limit_of_detection
+```{r}
+titers_2020_feature_removed_lod <- titers_2020_feature_removed %>%
+  mutate(
+    lower_limit_of_detection = if_else(isotype_antigen == "IgE_Total_UG/ML", 2.09613325980121, lower_limit_of_detection), ## Correct LOD for IgE_Total_UG/ML
+    ab_titer = if_else(ab_titer < lower_limit_of_detection, lower_limit_of_detection, ab_titer)
+  ) 
+
+## QC for LOD outliers
+## No Outliers detected
+lod_outlier <- titers_2020_feature_removed_lod %>%
+  group_by(isotype_antigen) %>%
+  #slice_min(MFI_normalized, n=2) %>%
+  #arrange(desc(MFI_normalized)) %>%
+  summarise(min = min(ab_titer), lod = lower_limit_of_detection, fc_min_max = lower_limit_of_detection/min(ab_titer)) %>%
+  filter(fc_min_max > 3)
+```
+
+
+### Identifying outlier ab titers.
+```{r}
+## If second_max_value/max_value > 3 then set max_value = LOD
+top_outlier <- titers_2020_feature_removed_lod %>%
+  group_by(isotype_antigen) %>%
+  slice_max(ab_titer, n=2) %>%
+  arrange(desc(ab_titer)) %>%
+  summarise(fc_min_max = max(ab_titer)/min(ab_titer)) %>%
+  filter(fc_min_max > 3)
+  
+## If first_value/LOD > 3 then set LOD as first_value
+bottom_outlier <- titers_2020_feature_removed_lod %>%
+  group_by(isotype_antigen) %>%
+  slice_min(ab_titer, n=2) %>%
+  arrange(desc(ab_titer)) %>%
+  summarise(fc_min_max = max(ab_titer)/min(ab_titer)) %>%
+  filter(fc_min_max > 2)
+
+## Ploting cummulative distribution to identify outliers.
+#Our transformation function
+scaleFUN <- function(x) sprintf("%.3f", x)
+
+#for(select_ia in c('IgE_Total'))
+for(select_ia in unique(titers_2020_feature_removed_lod$isotype_antigen))
+{
+plot1 <- titers_2020_feature_removed_lod %>%
+  mutate(subject_id = as.factor(subject_id)) %>%
+  filter(isotype_antigen == select_ia, planned_day_relative_to_boost < 50) %>%
+  arrange(desc(ab_titer)) %>%
+  ggplot(aes(y=ab_titer)) +  stat_ecdf(geom = "point", pad = FALSE) +
+  labs(y = "Ab titer", x = "Percentile")+ ggtitle(paste0("2020 Antibody titers (" , select_ia, ")")) + theme_bw() +
+  scale_y_continuous(trans = 'log2', labels=scaleFUN)
+
+plot(plot1)
+}
+```
+
+### LOD Corrections
+#### 1. Top outliers: IgG_PT
+#### 2. Bottom outliers: IgG_FHA, IgG_PRN
+```{r}
+titers_2020_feature_removed_lod_corrected <- titers_2020_feature_removed_lod %>%
+  mutate(
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG_FHA_IU/ML", 4.67953450834645, lower_limit_of_detection), ## Correct LOD for IgG_FHA
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG_PRN_IU/ML", 6.20594906363301, lower_limit_of_detection), ## Correct LOD for IgG_PRN
+    ab_titer = if_else(isotype_antigen == "IgG_PT_IU/ML" & ab_titer > 15000 , lower_limit_of_detection, ab_titer), ## Correct top outlier for IgG_PT 
+  ) %>%
+  mutate(ab_titer = if_else(ab_titer < lower_limit_of_detection | is.na(ab_titer) == TRUE, lower_limit_of_detection, ab_titer)) ## Setting ab titers to LOD for new LOD definitions
+
+## Validation plots
+for(select_ia in c("IgG_FHA_IU/ML", "IgG_PRN_IU/ML", "IgG_PT_IU/ML"))
+{
+plot1 <- titers_2020_feature_removed_lod_corrected %>%
+  mutate(subject_id = as.factor(subject_id)) %>%
+  filter(isotype_antigen == select_ia, planned_day_relative_to_boost < 50) %>%
+  arrange(desc(ab_titer)) %>%
+  ggplot(aes(y=ab_titer)) +  stat_ecdf(geom = "point", pad = FALSE) +
+  labs(y = "Ab titer", x = "Percentile")+ ggtitle(paste0("2020 Antibody titers (" , select_ia, ")")) + theme_bw() +
+  scale_y_continuous(trans = 'log2', labels=scaleFUN)
+
+plot(plot1)
+}
+
+```
+### Performing median based normalisation
+
+```{r}
+## Setting MFI zero values to lower limit of detection
+titers2020_calculate_lod <- titers_2020_feature_removed_lod_corrected %>%
+  #filter(isotype_antigen == 'IgE_Total') %>%
+  group_by(isotype_antigen) %>%
+  mutate(
+         lod_new = min(ab_titer[ab_titer > 0], na.rm = TRUE),
+         MFI_na_removed = if_else(ab_titer == 0 | is.na(ab_titer) == TRUE, lod_new, ab_titer)
+         ) %>%
+  ungroup() 
+
+## Calculate Overall median using MFI at day post boost 0
+df_d0_median_2020  <- titers2020_calculate_lod %>%
+  filter(planned_day_relative_to_boost == 0) %>%
+  group_by(isotype_antigen) %>%
+  summarise(
+    MFI_median_d0 = median(MFI_na_removed),
+  ) %>%
+  ungroup() 
+
+titers_2020_new_raw   <-  left_join(titers2020_calculate_lod , df_d0_median_2020 , by = "isotype_antigen") %>%
+  mutate(
+    MFI_normalized = MFI_na_removed / MFI_median_d0,
+  )
+```
+
+### Plot longitudinal data after median based normalisation
+```{r}
+
+#for(select_ia in c('IgE_Total_IU/ML'))
+for(select_ia in unique(titers_2020_new_raw$isotype_antigen))
+{
+plot1 <- titers_2020_new_raw %>%
+  mutate(subject_id = as.character(subject_id)) %>%
+  filter(isotype_antigen == select_ia, planned_day_relative_to_boost < 50) %>%
+    ggplot(aes(x=planned_day_relative_to_boost, y=MFI_normalized, )) +
+      geom_line(aes(group=subject_id),linetype = "dotted") +
+      geom_point() + 
+      labs(x = "Day post boost", y = "MFI Normalised") + 
+      geom_smooth(size = 1) +
+      theme_bw() +
+      theme(strip.background = element_blank(), strip.placement = "outside") +
+      ggtitle(paste0("2020 Antibody titers: ", select_ia)) +
+      scale_y_continuous(trans = 'log2', labels=scaleFUN)
+
+plot(plot1)
+}
+```
+### Output/final dataframe for database porpose
+```{r}
+titers_2020_new <- titers_2020_new_raw %>%
+  mutate(ab_titer_normalised = MFI_normalized,
+         ab_titer = ab_titer_original) %>%
+  select(specimen_id, isotype, antigen, unit, is_antigen_specific, ab_titer, ab_titer_normalised, lower_limit_of_detection) 
+
+write.csv(titers_2020_new,"titers_2020_new.csv")
+```
+```
+
