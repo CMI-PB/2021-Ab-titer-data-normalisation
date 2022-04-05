@@ -35,7 +35,8 @@ titers_2020 <- read_csv("2020LD_ab_titer.csv") %>%
 
 ```
 ### Count NA and below LOD samples per Isotype and Antigen pair 
-### Remove features with more than 80% missing values
+### Note features with more than 80% missing values
+### We haven't removed them from pre-processing
 ```{r}
 count_samples <- titers_2020 %>%
   group_by(isotype_antigen) %>%
@@ -50,10 +51,11 @@ count_0 <- titers_2020 %>%
 count_0
 
 remove_features <- count_0[count_0$percentage_0 > 80,]$isotype_antigen
-titers_2020_feature_removed <- titers_2020[!titers_2020$isotype_antigen %in% remove_features, ]
+#titers_2020_feature_removed <- titers_2020[!titers_2020$isotype_antigen %in% remove_features, ]
 ```
 ### Replace not detechetd values with lower_limit_of_detection
 ```{r}
+titers_2020_feature_removed = titers_2020
 titers_2020_feature_removed_lod <- titers_2020_feature_removed %>%
   mutate(
     lower_limit_of_detection = if_else(isotype_antigen == "IgE_Total_UG/ML", 2.09613325980121, lower_limit_of_detection), ## Correct LOD for IgE_Total_UG/ML
