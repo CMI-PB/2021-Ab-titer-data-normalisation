@@ -190,9 +190,9 @@ plot(plot1)
 ### Output/final dataframe for database porpose
 ```{r}
 titers_2020_new <- titers_2020_new_raw %>%
-  mutate(ab_titer_normalised = MFI_normalized,
-         ab_titer = ab_titer_original) %>%
-  select(specimen_id, isotype, antigen, unit, is_antigen_specific, ab_titer, ab_titer_normalised, lower_limit_of_detection) 
+  mutate(MFI_normalised = MFI_normalized,
+         MFI = ab_titer_original) %>%
+  select(specimen_id, isotype, antigen, unit, is_antigen_specific, MFI, MFI_normalised, lower_limit_of_detection) 
 
 write.csv(titers_2020_new,"titers_2020_new.csv")
 ```

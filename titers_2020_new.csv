@@ -1,4 +1,4 @@
-"","specimen_id","isotype","antigen","unit","is_antigen_specific","ab_titer","ab_titer_normalised","lower_limit_of_detection"
+"","specimen_id","isotype","antigen","unit","is_antigen_specific","MFI","MFI_normalised","lower_limit_of_detection"
 "1",1,"IgE","Total","UG/ML",FALSE,1110.21154215447,2.49342466590601,2.09613325980121
 "2",1,"IgE","Total","IU/ML",FALSE,2708.91616285691,2.49342466590601,29.17
 "3",1,"IgG","PT","IU/ML",TRUE,68.5661390514946,3.73699165501153,0.53
