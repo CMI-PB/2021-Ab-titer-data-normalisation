@@ -1,0 +1,206 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+#install.packages("readxl")
+library(readxl)
+library(tidyverse)
+library(MDimNormn)
+library(scales)
+
+```
+
+
+## Read data
+```{r}
+#input_data_wide = read_tsv("Corrected Data Analysis for Antibody Titers for Tdapshort 3.csv") 
+input_data_raw_wide = read_tsv("Final data FS.csv") 
+#input_data_wide = read_tsv("Data Analysis for all isotypes.csv") 
+control_sample_id = "4091-WC-5"
+
+input_data_raw_long <- input_data_raw_wide %>% 
+   tidyr::pivot_longer(
+     cols = c('PRN','DT','FHA','Fim2/3','TT', 'PT', 'OVA'), 
+     names_to = "antigen", 
+     values_to = "MFI", ) %>% 
+      group_by(antigen)
+
+#input_data_long$MFI_log = log(input_data_long$MFI + 1)
+## Remove IgE expressions
+input_data_raw_long <- input_data_raw_long[input_data_raw_long$Isotype %in% c('IgG', 'IgG1','IgG2','IgG3','IgG4'), ]
+
+input_data_control = input_data_raw_long  %>%
+            filter(Sample_ID == control_sample_id)
+
+input_data = input_data_raw_long  %>%
+            filter(Sample_ID != control_sample_id) 
+
+input_data$MFI1 <- input_data$MFI
+
+table(input_data_control$Sample_ID)
+```
+## List all zero values for entries
+```{r}
+#input_data[input_data$MFI==0, ]$Plate %>% table()
+
+lst_zero = list()
+for(iso in isotype.list){
+  
+  for(anti in antigen.list){
+   
+    dff <- input_data[input_data$Isotype == iso & input_data$antigen == anti, ]    
+    flag = 0
+    
+    for(val in dff$MFI){
+      
+      if(val ==0){
+        flag = flag + 1
+      }
+      
+    }
+    
+    ff <- c(anti, iso, flag)
+    lst_zero <- rbind(lst_zero, ff)
+    #print(flag)
+    
+  }
+}
+
+colnames(lst_zero) <- c("Antigen", "Isotype", "Count_zeros")
+lst_zero
+```
+
+```{r}
+
+input_data[input_data$MFI1==0, ]$MFI1 <- NA
+
+input_data_medians <- input_data %>%
+  group_by(Isotype, antigen, Plate) %>%
+  #summarise(., median = median(MFI1, na.rm=T), mean = mean(MFI1, na.rm=T))
+  summarise(., median = median(MFI1, na.rm=T))
+  #summarise(., median = median(MFI), mean = mean(MFI))
+
+input_data_assay_median <- input_data %>%
+  group_by(Isotype, antigen) %>%
+  #summarise(., median = median(MFI1, na.rm=T), mean = mean(MFI1, na.rm=T))
+  summarise(., median = median(MFI1, na.rm=T))
+
+```
+
+```{r}
+input_data_new <- list()
+
+for (which.isotype in isotype.list)
+{
+  #which.isotype = "IgG1"
+  
+  input_isotype_data <- input_data %>%
+    filter(., Isotype == which.isotype)
+  
+  input_median_isotype <- input_data_medians %>%
+     filter(., Isotype == which.isotype)
+
+  input_data_isotype_new <- list()
+  
+  antigen.list = unique(input_isotype_data$antigen)
+  
+  for (which.antigen in antigen.list)
+  {
+    #which.antigen = 'DT'
+    
+    input_isotype_antigen_data <- input_isotype_data %>%
+      filter(., antigen == which.antigen)
+      
+    input_median_isotype_antigen <- input_median_isotype %>%
+      filter(., antigen == which.antigen)
+    
+    #all_plate_avg_median <- input_median_isotype_antigen  %>%
+      # summarize(n(), avg_median = mean(median, na.rm = TRUE)) 
+    
+    overall_median_value <- input_data_assay_median %>%
+      filter(., antigen == which.antigen & Isotype == which.isotype)
+    
+    #input_median_isotype_antigen$ratio_median_and_avg_median <- input_median_isotype_antigen$median/all_plate_avg_median$avg_median
+    
+    input_isotype_antigen_data_new <- list()
+    
+    for(which.plate in plates.list)
+    {
+      #which.plate <- 1
+      input_isotype_antigen_data_plate <- input_isotype_antigen_data %>%
+         filter(., Plate == which.plate)
+      
+       
+       input_median_isotype_antigen_plate <-  input_median_isotype_antigen %>%
+         filter(., Plate == which.plate)
+      
+           #input_isotype_antigen_data_plate$MFI_new <- (input_isotype_antigen_data_plate$MFI) / (input_median_isotype_antigen_plate$median)
+        input_isotype_antigen_data_plate$MFI_new1 <- (input_isotype_antigen_data_plate$MFI) - (input_median_isotype_antigen_plate$median)
+        #input_isotype_antigen_data_plate$median <- (input_median_isotype_antigen_plate$median)
+        input_isotype_antigen_data_plate$MFI_new2 <- input_isotype_antigen_data_plate$MFI_new1 + overall_median_value$median
+        
+      input_isotype_antigen_data_new <- rbind(input_isotype_antigen_data_new, input_isotype_antigen_data_plate)
+      
+    }
+    
+    input_data_isotype_new <- rbind(input_data_isotype_new, input_isotype_antigen_data_new )
+  }
+  input_data_new <- rbind(input_data_new, input_data_isotype_new)
+}
+```
+
+##Plot Each 
+```{r}
+#input_data_new[ input_data_new$Sample_ID == '1686-WC-1',]
+antigen.list = unique(input_data_new$antigen)
+for(which.antigen in antigen.list)
+{  
+  #anti <- 'PT'
+
+  data_df1 <- input_data_new %>%
+    #filter(., Isotype == "IgG2") %>%
+    filter(., antigen == which.antigen)
+  
+  p <- ggplot(data_df1, aes(x=as.character(Plate), y=MFI_new2)) + 
+    scale_shape_manual(values=c(16, 3)) +
+     ylab(paste0(which.antigen)) +
+    #scale_color_manual(values=c('grey50')) +
+    geom_point(aes(fill = Plate)) +
+    theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+    scale_y_continuous(trans = log2_trans()) +
+    stat_summary(fun = median, geom = "crossbar", width = 0.5) +
+    facet_wrap(~Isotype) 
+  
+  plot(p)
+}
+
+```
+##After normalisation
+```{r}
+antigen.list = unique(input_data_new$antigen)
+for(which.antigen in antigen.list)
+{  
+  #anti <- 'PT'
+
+  data_df1 <- input_data_new %>%
+    #filter(., Isotype == "IgG2") %>%
+    filter(., antigen == which.antigen)
+  
+  p <- ggplot(data_df1, aes(x=as.character(Plate), y=MFI_new2)) + 
+    scale_shape_manual(values=c(16, 3)) +
+     ylab(paste0(which.antigen)) +
+    #scale_color_manual(values=c('grey50')) +
+    geom_point(aes(fill = Plate)) +
+    theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+    scale_y_continuous(trans = log2_trans()) +
+    stat_summary(fun = median, geom = "crossbar", width = 0.5) +
+    facet_wrap(~Isotype) 
+  
+  plot(p)
+}
+
+```
+

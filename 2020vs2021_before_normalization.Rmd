@@ -1,0 +1,187 @@
+---
+title: "Pre and Post comparison"
+output: html_notebook
+---
+
+```{r}
+data_dir <- "/home/pramod/Documents/GitHub/gitlab/2021-ab-titer-data-normalisation/private/data/"
+
+#Our transformation function
+scaleFUN <- function(x) sprintf("%.3f", x)
+```
+
+### Reading dataset from experimental datafile
+```{r}
+
+setwd("/home/pramod/Documents/GitHub/gitlab/2021-ab-titer-data-normalisation/private/data/")
+titers_2020 <- read_tsv("2020_abtiter_long.csv", col_names = FALSE, show_col_types = FALSE) 
+colnames(titers_2020) <- c("specimen_id",  "isotype",  "is_antigen_specific",  "antigen",  "ab_titer", "unit",  "lower_limit_of_detection")
+
+titers_2020 <- titers_2020 %>%
+  filter(isotype != "IgE") %>%
+  mutate(
+    antigen = replace(antigen, antigen =='1% PFA PT', 'PT'),
+    isotype_antigen = paste0(isotype,"_",antigen),
+    ab_titer_original = ab_titer, ## Kepping ab)titer_original for final dataframe
+    subject_id = substr(specimen_id, 1,4),
+    visit = substr(specimen_id, 9,9),
+    planned_day_relative_to_boost= case_when(
+                visit == 1 ~ 0,
+                visit == 2 ~ 1,
+                visit == 3 ~ 3,
+                visit == 4 ~ 7,
+                visit == 5 ~ 14,
+                visit == 6 ~ 30,
+                visit == 7 ~ 90,
+           )
+  ) 
+```
+
+## Read 2021 plate data for 6 plates
+```{r}
+input_data_raw_wide = read_csv(paste0(data_dir, "Final data FS.csv")) 
+control_sample_id = "4091-WC-5"
+
+input_data_raw_long <- input_data_raw_wide %>% 
+   tidyr::pivot_longer(
+     cols = c('PRN','DT','FHA','FIM2/3','TT', 'PT', 'OVA'), 
+     names_to = "antigen", 
+     values_to = "MFI", )  %>% 
+    mutate(isotype_antigen = paste0(isotype ,"_", antigen),
+           MFI_original = MFI,
+            visit = substr(Sample_ID, 9,9),
+            subject_id = substr(Sample_ID, 1,4),
+            specimen_id = Sample_ID,
+            planned_day_relative_to_boost = case_when(
+                visit == 1 ~ 0,
+                visit == 2 ~ 1,
+                visit == 3 ~ 3,
+                visit == 4 ~ 7,
+                visit == 5 ~ 14,
+                visit == 6 ~ 30,
+                visit == 7 ~ 90,)
+    ) %>% ## Remove IgE expressions
+    filter(isotype %in% c('IgG', 'IgG1','IgG2','IgG3','IgG4')) %>%
+  select(-Sample_ID)
+
+input_data_raw_long <- input_data_raw_long %>%
+  filter(!subject_id %in% c("1686", "2631"))
+
+input_data_control = input_data_raw_long  %>%
+            filter(specimen_id == control_sample_id)
+
+titers_2021 = input_data_raw_long  %>%
+            filter(specimen_id != control_sample_id)
+
+table(input_data_control$specimen_id)
+```
+## Identify overlapping features and limit data matrices to these limimted features
+```{r}
+features_2020 <- unique(titers_2020$isotype_antigen)
+features_2021 <- unique(titers_2021$isotype_antigen)
+
+features_2020_2021 <- intersect(features_2020, features_2021)
+
+titers_2020_v1 <- titers_2020 %>% 
+  filter(isotype_antigen %in% features_2020_2021) %>% 
+  select(subject_id, specimen_id, isotype, antigen, ab_titer_original, planned_day_relative_to_boost) %>% 
+  rename(ab_titer = ab_titer_original) %>% 
+  mutate("dataset" = "training")
+
+titers_2021_v1 <- titers_2021 %>% 
+  filter(isotype_antigen %in% features_2020_2021) %>% 
+  select(subject_id, specimen_id, isotype, antigen, MFI_original, planned_day_relative_to_boost) %>% 
+  rename(ab_titer = MFI_original) %>% 
+  mutate("dataset" = "testing")
+
+titers_2020_2021_v1 <- rbind(titers_2020_v1, titers_2021_v1)
+#write_csv(titers_2020_2021_v1, paste0(data_dir, "titers_2020_2021_rawmost.csv"))
+
+```
+
+
+### Plot longitudinal data after median based normalisation
+
+```{r}
+tiff("before_normalization.tiff", units="in", width=10, height=10, res=500)
+# insert ggplot code
+
+plot1 <- titers_2020_2021_v1 %>%
+  mutate(subject_id = as.character(subject_id)) %>%
+  filter(isotype != "IgE", planned_day_relative_to_boost < 50) %>%
+    ggplot(aes(x=planned_day_relative_to_boost, y=ab_titer, color = dataset)) +
+      geom_line(aes(group=subject_id),linetype = "dotted") +
+      geom_point() + 
+      labs(x = "Day post Tdap boost", y = "Antibody titer") + 
+      geom_smooth(size = 1) +
+      theme_bw() +
+      theme(strip.background = element_blank(), strip.placement = "outside") +
+      ggtitle(paste0("Before normalizaion")) +
+      scale_y_continuous(trans = 'log2', labels=scaleFUN)  +
+      facet_grid(vars(antigen), vars(isotype), scales = "free")
+
+plot(plot1)
+dev.off()
+
+```
+
+=== After Normalization =================
+```{r}
+subject_specimen <- titers_2020_2021_v1 %>%
+  dplyr::select(subject_id, specimen_id, planned_day_relative_to_boost) %>%
+  distinct()
+
+titers_2020_post <- read_tsv(paste0(data_dir, "2020_abtiters_normalised_04052021.csv"), show_col_types = FALSE) %>%
+  mutate(isotype_antigen = paste0(isotype, "_", antigen))
+
+titers_2021_post <- read_tsv(paste0(data_dir, "2021_abtiters_normalised_04052021.csv"), show_col_types = FALSE) %>%
+    mutate(isotype_antigen = paste0(isotype, "_", antigen))
+
+features_2020_post <- unique(titers_2020_post$isotype_antigen)
+features_2021_post <- unique(titers_2021_post$isotype_antigen)
+
+features_2020_2021_post <- intersect(features_2020_post, features_2021_post)
+
+titers_2020_post_v1 <- titers_2020_post %>% 
+  filter(isotype_antigen %in% features_2020_2021) %>% 
+  select(specimen_id, isotype, antigen, isotype_antigen, ab_titer_normalised) %>% 
+  #rename(ab_titer = ab_titer_normalised) %>% 
+  mutate("dataset" = "training")
+
+titers_2021_post_v1 <- titers_2021_post %>% 
+  filter(isotype_antigen %in% features_2020_2021) %>% 
+  select(specimen_id, isotype, antigen, isotype_antigen, ab_titer_normalised) %>% 
+  #rename(ab_titer = MFI_original) %>% 
+  mutate("dataset" = "testing")
+
+titers_2020_2021_post_v1 <- rbind(titers_2020_post_v1, titers_2021_post_v1) %>%
+  left_join(subject_specimen)
+
+```
+
+### Plot longitudinal data after median based normalisation | After normalization
+
+```{r}
+
+tiff("after_normalization.tiff", units="in", width=10, height=10, res=500)
+# insert ggplot code
+plot2 <- titers_2020_2021_post_v1 %>%
+  mutate(subject_id = as.character(subject_id)) %>%
+  filter(isotype != "IgE", planned_day_relative_to_boost < 50) %>%
+    ggplot(aes(x=planned_day_relative_to_boost, y=ab_titer_normalised, color = dataset)) +
+      geom_line(aes(group=subject_id),linetype = "dotted") +
+      geom_point() + 
+      labs(x = "Day post Tdap boost", y = "Antibody titer") + 
+      geom_smooth(size = 1) +
+      theme_bw() +
+      theme(strip.background = element_blank(), strip.placement = "outside") +
+      ggtitle(paste0("After normalizaion")) +
+      scale_y_continuous(trans = 'log2', labels=scaleFUN)  +
+      facet_grid(vars(antigen), vars(isotype), scales = "free")
+
+plot(plot2)
+dev.off()
+
+plot(plot2)
+```
+

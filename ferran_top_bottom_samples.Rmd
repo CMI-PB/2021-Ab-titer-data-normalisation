@@ -1,0 +1,82 @@
+---
+title: "Identify top and bottom responders"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+library(pheatmap)
+library(tidyverse)
+
+setwd("/home/pramod/Documents/cmipb_project/ab_plate_normalisation")
+data_2021_metadata <- read_tsv("metadata_cmipb_2021.csv")
+
+#data_2021 <- read_tsv("2021_ab_titer_032422.tsv")  %>%
+data_2021 <- read_tsv("2021_ab_titer_032522_one_lod.tsv")  %>%
+   rename(specimen_id = Sample_ID) %>%
+    mutate(subject_id = substr(specimen_id, 1,4),
+           visit = substr(specimen_id, 9,9),
+           dpb= case_when(
+                visit == 1 ~ 0,
+                visit == 2 ~ 1,
+                visit == 3 ~ 3,
+                visit == 4 ~ 7,
+                visit == 5 ~ 14,
+                visit == 6 ~ 30,
+                visit == 7 ~ 90,
+           ),
+           isotype_antigen = paste0(isotype,"_",antigen)
+  ) 
+  
+```
+```{r}
+top_responder <- data_2021 %>%
+  filter(dpb == 14) %>%
+  group_by(isotype_antigen) %>%
+  slice_max(ab_titer_median, n = 10) %>%
+  ungroup() %>%
+  group_by(subject_id) %>%
+  select(isotype_antigen, subject_id)  %>%
+  mutate(value = 1) 
+
+top_responder_mat <- top_responder %>%
+  pivot_wider(names_from = isotype_antigen, values_from = value)  %>%
+  column_to_rownames("subject_id") %>%
+  as.matrix()
+  
+top_responder_mat[is.na(top_responder_mat)] = 0
+
+pheatmap(top_responder_mat, cluster_cols = F, cutree_rows = 5, main = "top responder")
+
+top_responder %>%
+  summarise(Count=n()) %>%
+  arrange(desc(Count))
+```
+
+```{r}
+bottom_responder <- data_2021 %>%
+  filter(dpb == 0) %>%
+  group_by(isotype_antigen) %>%
+  slice_min(ab_titer_median, n = 10) %>%
+  ungroup() %>%
+  group_by(subject_id) %>%
+  select(isotype_antigen, subject_id)  %>%
+  mutate(value = 1) 
+
+bottom_responder_mat <- bottom_responder %>%
+  pivot_wider(names_from = isotype_antigen, values_from = value)  %>%
+  column_to_rownames("subject_id") %>%
+  as.matrix()
+  
+  
+bottom_responder_mat[is.na(bottom_responder_mat)] = 0
+
+pheatmap(bottom_responder_mat, cluster_cols = F, cutree_rows = 5, main = "bottom responder")
+
+bottom_responder %>%
+  summarise(Count=n()) %>%
+  arrange(desc(Count))
+  
+```
+

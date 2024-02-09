@@ -1,0 +1,48 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+## Read plate data for 6 plates
+```{r}
+#input_data_wide = read_tsv("Corrected Data Analysis for Antibody Titers for Tdapshort 3.csv") 
+input_data_raw_wide = read_csv("Final data FS.csv") 
+#input_data_wide = read_tsv("Data Analysis for all isotypes.csv") 
+control_sample_id = "4091-WC-5"
+
+input_data_raw_long <- input_data_raw_wide %>% 
+   tidyr::pivot_longer(
+     cols = c('PRN','DT','FHA','FIM2/3','TT', 'PT', 'OVA'), 
+     names_to = "antigen", 
+     values_to = "MFI", )  %>% 
+    mutate( isotype_antigen = paste0(isotype ,"_", antigen),
+            visit = substr(Sample_ID, 9,9),
+            dpb= case_when(
+                visit == 1 ~ 0,
+                visit == 2 ~ 1,
+                visit == 3 ~ 3,
+                visit == 4 ~ 7,
+                visit == 5 ~ 14,
+                visit == 6 ~ 30,
+                visit == 7 ~ 90,)
+    ) %>% ## Remove IgE expressions
+    filter(isotype %in% c('IgG', 'IgG1','IgG2','IgG3','IgG4'))
+
+input_data_control = input_data_raw_long  %>%
+            filter(Sample_ID == control_sample_id)
+
+input_data = input_data_raw_long  %>%
+            filter(Sample_ID != control_sample_id)
+        
+#input_data$MFI_0_removed <- input_data$MFI
+
+
+table(input_data_control$Sample_ID)
+```
+
+```{r}
+plot_data <- input_data[input_data$isotype_antigen == "IgG_DT",]
+
+
+```
+

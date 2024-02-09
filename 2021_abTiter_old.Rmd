@@ -1,0 +1,268 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r echo=FALSE}
+
+packages <- c("tidyverse", "scales", "MDimNormn","readxl")
+
+for (n in 1:length(packages)) {
+    suppressMessages(library(packages[n], character.only = TRUE))
+}
+
+```
+
+
+## Read plate data for 6 plates
+```{r}
+#input_data_wide = read_tsv("Corrected Data Analysis for Antibody Titers for Tdapshort 3.csv") 
+input_data_raw_wide = read_csv("Final data FS.csv") 
+#input_data_wide = read_tsv("Data Analysis for all isotypes.csv") 
+control_sample_id = "4091-WC-5"
+
+input_data_raw_long <- input_data_raw_wide %>% 
+   tidyr::pivot_longer(
+     cols = c('PRN','DT','FHA','FIM2/3','TT', 'PT', 'OVA'), 
+     names_to = "antigen", 
+     values_to = "MFI", )  %>% 
+    mutate( isotype_antigen = paste0(isotype ,"_", antigen),
+            visit = substr(Sample_ID, 9,9),
+            subject_id = substr(Sample_ID, 1,4),
+            dpb= case_when(
+                visit == 1 ~ 0,
+                visit == 2 ~ 1,
+                visit == 3 ~ 3,
+                visit == 4 ~ 7,
+                visit == 5 ~ 14,
+                visit == 6 ~ 30,
+                visit == 7 ~ 90,)
+    ) %>% ## Remove IgE expressions
+    filter(isotype %in% c('IgG', 'IgG1','IgG2','IgG3','IgG4'))
+
+input_data_raw_long <- input_data_raw_long %>%
+  filter(!subject_id %in% c("1686", "2631"))
+
+input_data_control = input_data_raw_long  %>%
+            filter(Sample_ID == control_sample_id)
+
+input_data = input_data_raw_long  %>%
+            filter(Sample_ID != control_sample_id)
+        
+#input_data$MFI_0_removed <- input_data$MFI
+
+
+table(input_data_control$Sample_ID)
+```
+
+## Count median value considering 0 count and ingnoring 0 count
+```{r}
+#isotype_antigen.list <- unique(input_data$isotype_antigen)
+
+#input_data[input_data$MFI_0_removed==0, ]$MFI_0_removed <- NA
+
+#input_data_medians <- input_data %>%
+ ## group_by(isotype_antigen, Plate) %>%
+  #summarise(., median = median(MFI1, na.rm=T), mean = mean(MFI1, na.rm=T))
+  #summarise(., median = median(MFI_0_removed, na.rm=T), mad = mad(MFI_0_removed, na.rm=T)) %>%
+  #ungroup()
+  ##summarise(., median = median(MFI), mean = mean(MFI))
+
+```
+```{r}
+#input_data_1 <- input_data[input_data$isotype_antigen == "IgG3_PT",]
+## Setting MFI zero values to lower limit of detection
+df_lod_calculated <- input_data %>%
+  #group_by(isotype_antigen, Plate) %>%
+  group_by(isotype_antigen) %>%
+  mutate(lod = min(MFI[MFI>0]),
+         MFI_lod = if_else(MFI <= 0, lod, MFI)
+         ) %>%
+  ungroup() 
+
+df_d0_median <- df_lod_calculated %>%
+  filter(dpb == 0) %>%
+  group_by(isotype_antigen) %>%
+  summarise(
+    overall_median_d0 = median(MFI_lod),
+    #overall_iqr_d0 = IQR(MFI_lod)
+  ) 
+
+input_data_new  <-  left_join(df_lod_calculated, df_d0_median, by = "isotype_antigen") %>%
+  mutate(
+    ab_titer_median = MFI_lod / overall_median_d0,
+  )
+```
+
+```{r}
+#View(df_lod_calculated[df_lod_calculated$isotype == "IgG4" & df_lod_calculated$antigen == "PRN" & df_lod_calculated$Plate == 1,])
+
+View(input_data_new %>% filter(antigen == "PRN", isotype == "IgG4", Plate ==1))
+```
+
+
+```{r}
+df_d0_median %>%
+  ggplot(aes(log(overall_median_d0), log(overall_iqr_d0))) + geom_point() + theme_ipsum() + geom_smooth() 
+  
+
+medians_d0_2021 <- input_data_new %>%
+  group_by(isotype_antigen) %>%
+  filter(dpb == 0) %>%
+  summarize(iqr_d0 = IQR(ab_titer_iqr),
+            median_d0 = median(ab_titer_median)
+            )
+
+medians_d0_2021
+
+```
+
+```{r}
+input_data_new$is_antigen_specific = TRUE
+input_data_new$unit = 'MFI'
+#input_data_new$ab_titer = input_data_new$MFI_lod_median
+
+input_data_db <- input_data_new %>%
+  #select(!Plate & !MFI & !MFI1 & !MFI_new & !MFI_new_final)%>%
+  dplyr::select(`Sample_ID`, Plate,isotype,antigen,visit,dpb, ab_titer_median, isotype_antigen, Plate) %>%
+  group_by(isotype_antigen) %>%
+  mutate(lower_limit_of_dectection_median = min(ab_titer_median)) %>%
+  ungroup()
+  
+##Save file
+write.table(input_data_db, file = "2021_ab_titer_032522_one_lod.tsv", row.names=FALSE, sep="\t")
+
+input_data_db %>%
+  group_by(isotype_antigen) %>%
+  filter(dpb == 0)  %>%
+  summarise(median_d0 = median(ab_titer_median))
+
+```
+
+
+## Plot Each Plate before Plate normalisation
+```{r}
+#input_data_new[ input_data_new$Sample_ID == '1686-WC-1',]
+input_data_new$Plate <- as.character(input_data_new$Plate)
+antigen.list = unique(input_data_new$antigen)
+for(which.antigen in antigen.list)
+{  
+  #anti <- 'PT'
+
+  data_df1 <- input_data_new %>%
+    #filter(., isotype == "IgG2") %>%
+    filter(., antigen == which.antigen & MFI > 0)
+  
+  p <- ggplot(data_df1, aes(x=Plate, y=MFI)) + 
+    scale_shape_manual(values=c(16, 3)) +
+     ylab(paste0(which.antigen)) +
+    #scale_color_manual(values=c('grey50')) +
+    geom_point(aes(fill = Plate)) +
+    #geom_point(aes(y = lower_limit_of_detection), colour = "red") +
+    theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+    scale_y_continuous(trans = log2_trans()) +
+    stat_summary(fun = median, geom = "crossbar", width = 0.5) +
+    facet_wrap(~isotype) 
+  
+  plot(p)
+}
+
+```
+
+## Plot Each Plate after Plate normalisation and including limit of detection values
+```{r}
+#input_data_new[ input_data_new$Sample_ID == '1686-WC-1',]
+input_data_new$Plate <- as.character(input_data_new$Plate)
+antigen.list = unique(input_data_new$antigen)
+for(which.antigen in antigen.list)
+{  
+  data_df1 <- input_data_new %>%
+    filter(., antigen == which.antigen)
+  
+  p <- ggplot(data_df1, aes(x=Plate, y=MFI_lod_median)) + 
+    scale_shape_manual(values=c(16, 3)) +
+     ylab(paste0(which.antigen)) +
+    geom_point(aes(fill = Plate)) +
+    #geom_point(aes(y = lower_limit_of_detection), colour = "red", size =0.5) +
+    theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+    scale_y_continuous(trans = log2_trans()) +
+    stat_summary(fun = median, geom = "crossbar", width = 0.5) +
+    facet_wrap(~isotype) 
+  
+  plot(p)
+}
+
+```
+
+
+
+
+```{r}
+for(select.antigen in unique(input_data_new$antigen))
+{
+  
+input_data_new$subject_id <- str_sub(input_data_new$Sample_ID, start = 1, end = 4)  
+plot <- input_data_new %>%
+  filter(antigen == select.antigen, isotype == "IgG4", dpb < 50) %>%
+  ggplot(., aes(y=ab_titer_median, x=dpb)) +
+    ggtitle(paste0("2021 Antibody titers (" , select.antigen, ")")) +
+    geom_point() + 
+    geom_line(aes(group=subject_id),linetype = "dotted")+
+     #geom_smooth() +
+    #theme_ipsum() +
+    facet_wrap(. ~ antigen, scales = "free")
+
+plot(plot)
+}
+```
+##Plot tail data distribution
+```{r}
+#count_0 <- input_data_new %>%
+#  group_by(isotype_antigen) %>%
+ # filter(MFI_lod_median == 0) %>%
+  #summarize(count_0 = n())  %>%
+  #ungroup()
+input_data_new$isotype_antigen <- paste0(input_data_new$isotype,"_",input_data$antigen)
+
+bottom_n_input_data_new <- input_data_new %>%
+  group_by(isotype_antigen) %>%
+  #slice_min(ab_titer_median, n = 40)  %>% 
+  arrange(desc(ab_titer_median)) %>%
+  ungroup()
+
+
+
+```
+
+```{r}
+
+for(select.isotype in c("IgG","IgG1", "IgG2", "IgG3", "IgG4"))
+{
+  
+p1 <- input_data_new %>%
+  filter(isotype == select.isotype) %>%
+  arrange(desc(ab_titer_median)) %>%
+  ggplot(aes(y=ab_titer_median)) +  stat_ecdf(geom = "point")+
+  labs(y = "Ab titer")+ ggtitle(paste0("2021 Antibody titers (" , select.isotype, ")")) + theme_bw() +
+  facet_wrap(. ~ antigen, scales = "free", nrow = 2) 
+  
+  #ggplot(aes(x=ab_titer_median, y=Sample_ID)) +  geom_point()
+plot(p1)
+}
+```
+
+```{r}
+aa <- input_data %>%  
+filter(isotype != "IgE" & dpb==0) %>%
+  group_by(isotype_antigen) %>%
+  mutate(titer = if_else(MFI == 0, min(MFI), MFI),
+   #      titer_lod = if_else(ab_titer <= lower_limit_of_detection, lower_limit_of_detection, ab_titer),
+           ) %>%
+  summarise(median_lod_T= median(MFI), median_lod_F= median(titer[titer>0]))
+```
+
+```{r}
+input_data[input_data$isotype_antigen == "IgG4_FIM2/3",]
+```
+

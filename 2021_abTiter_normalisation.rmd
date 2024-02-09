@@ -1,0 +1,225 @@
+---
+title: "2020 Ab titer data: Median (at Day 0) based normalisation"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r echo=FALSE}
+packages <- c("tidyverse", "scales", "MDimNormn","readxl")
+
+for (n in 1:length(packages)) {
+    suppressMessages(library(packages[n], character.only = TRUE))
+}
+
+```
+
+## Read plate data for 6 plates
+```{r}
+input_data_raw_wide = read_csv("Final data FS.csv") 
+control_sample_id = "4091-WC-5"
+
+input_data_raw_long <- input_data_raw_wide %>% 
+   tidyr::pivot_longer(
+     cols = c('PRN','DT','FHA','FIM2/3','TT', 'PT', 'OVA'), 
+     names_to = "antigen", 
+     values_to = "MFI", )  %>% 
+    mutate(isotype_antigen = paste0(isotype ,"_", antigen),
+           MFI_original = MFI,
+            visit = substr(Sample_ID, 9,9),
+            subject_id = substr(Sample_ID, 1,4),
+            specimen_id = Sample_ID,
+            planned_day_relative_to_boost = case_when(
+                visit == 1 ~ 0,
+                visit == 2 ~ 1,
+                visit == 3 ~ 3,
+                visit == 4 ~ 7,
+                visit == 5 ~ 14,
+                visit == 6 ~ 30,
+                visit == 7 ~ 90,)
+    ) %>% ## Remove IgE expressions
+    filter(isotype %in% c('IgG', 'IgG1','IgG2','IgG3','IgG4')) %>%
+  select(-Sample_ID)
+
+input_data_raw_long <- input_data_raw_long %>%
+  filter(!subject_id %in% c("1686", "2631"))
+
+input_data_control = input_data_raw_long  %>%
+            filter(specimen_id == control_sample_id)
+
+titers_2021 = input_data_raw_long  %>%
+            filter(specimen_id != control_sample_id)
+
+table(input_data_control$specimen_id)
+```
+
+```{r}
+titers_2021_lod <- titers_2021 %>% 
+  group_by(isotype_antigen) %>%
+  mutate(lower_limit_of_detection = min(MFI[ MFI > 0 ]),
+         MFI = if_else(MFI == 0 | is.na(MFI) == TRUE, lower_limit_of_detection, MFI)
+         ) %>%
+  ungroup() 
+  
+## QC for LOD outliers
+## No Outliers detected
+lod_outlier <- titers_2021_lod %>%
+  group_by(isotype_antigen) %>%
+  summarise(min = min(MFI), lod = lower_limit_of_detection, fc_min_max = lower_limit_of_detection/min(MFI)) %>%
+  filter(fc_min_max > 3)
+
+lod_outlier
+```
+
+### Identifying outlier ab titers.
+```{r}
+## If second_max_value/max_value > 3 then set max_value = LOD
+top_outlier <- titers_2021_lod %>%
+  group_by(isotype_antigen) %>%
+  slice_max(MFI, n=3) %>%
+  arrange(desc(MFI)) %>%
+  summarise(fc_min_max = max(MFI)/min(MFI)) %>%
+  filter(fc_min_max > 3)
+  
+## If first_value/LOD > 3 then set LOD as first_value
+bottom_outlier <- titers_2021_lod %>%
+  group_by(isotype_antigen) %>%
+  distinct(MFI) %>%
+  slice_min(MFI, n=4) %>%
+  arrange(desc(MFI)) %>%
+  summarise(max = max(MFI), min = min(MFI), fc_min_max = max(MFI)/min(MFI)) %>%
+  filter(fc_min_max > 3)
+```
+
+
+```{r}
+## Ploting cummulative distribution to identify outliers.
+#Our transformation function
+scaleFUN <- function(x) sprintf("%.3f", x)
+
+#for(select_ia in c('IgE_Total'))
+for(select_ia in unique(titers_2021$isotype_antigen))
+{
+plot1 <- titers_2021 %>%
+  mutate(subject_id = as.factor(subject_id)) %>%
+  filter(isotype_antigen == select_ia, planned_day_relative_to_boost < 50) %>%
+  arrange(desc(MFI)) %>%
+  ggplot(aes(y=MFI)) +  stat_ecdf(geom = "point", pad = FALSE) +
+  labs(y = "MFI", x = "Percentile")+ ggtitle(paste0("2020 Antibody titers (" , select_ia, ")")) + theme_bw() +
+  scale_y_continuous(trans = 'log2', labels=scaleFUN)
+
+plot(plot1)
+}
+
+```
+
+```{r}
+titers_2021_lod_corrected <- titers_2021_lod %>%
+  mutate(
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG_FIM2/3", 13.875961595364, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG2_FHA", 12.5691726823877, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG_PRN", 502.263892462973, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG_DT", 2448.25, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG_FHA", 7.07109165419973, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG_TT", 2557.14689897826, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG_OVA", 73.1123458260283, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG1_DT", 2031.61529, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG1_FHA", 346.222982836853, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG1_FIM2/3", 20.75, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG1_TT", 1430.3754, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG1_PT", 0.598012342360263, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG1_OVA", 9.75, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG2_PRN", 30.75, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG2_DT", 29.6929501339206, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG2_FIM2/3", 6.13315603019296, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG2_TT", 33.3350425758864, lower_limit_of_detection),
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG2_PT", 0.853742633006448, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG2_OVA", 14.6811977156665, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG3_PRN", 7.19295013392056 , lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG3_FHA", 1.44127789076802 , lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG3_FIM2/3", 5.15442498753306, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG3_TT", 1.11323854898188, lower_limit_of_detection), 
+    
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG4_PRN", 1.75, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG4_DT", 9.428753, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG4_FHA", 9.5967560, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG4_FIM2/3", 0.9520116, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG4_TT", 1.07942214333787, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG4_PT", 1.0000000, lower_limit_of_detection), 
+    lower_limit_of_detection = if_else(isotype_antigen == "IgG4_OVA", 198.923303, lower_limit_of_detection), 
+    
+  ) %>%
+  mutate(MFI_lod = if_else(MFI < lower_limit_of_detection | is.na(MFI) == TRUE, lower_limit_of_detection, MFI)) ## Setting ab titers to LOD for new LOD definitions
+```
+
+
+```{r}
+#for(select_ia in c('IgE_Total'))
+for(select_ia in unique(titers_2021_lod_corrected$isotype_antigen))
+{
+plot1 <- titers_2021_lod_corrected %>%
+  mutate(subject_id = as.factor(subject_id)) %>%
+  filter(isotype_antigen == select_ia, planned_day_relative_to_boost < 50) %>%
+  arrange(desc(MFI_lod)) %>%
+  ggplot(aes(y=MFI_lod)) +  stat_ecdf(geom = "point", pad = FALSE) +
+  labs(y = "MFI", x = "Percentile")+ ggtitle(paste0("2020 Antibody titers (" , select_ia, ")")) + theme_bw() +
+  scale_y_continuous(trans = 'log2', labels=scaleFUN)
+
+plot(plot1)
+}
+
+```
+
+```{r}
+#input_data_1 <- input_data[input_data$isotype_antigen == "IgG3_PT",]
+## Setting MFI zero values to lower limit of detection
+df_d0_median <- titers_2021_lod_corrected %>%
+  filter(planned_day_relative_to_boost == 0) %>%
+  group_by(isotype_antigen) %>%
+  summarise(
+    overall_median_d0 = median(MFI_lod),
+  ) 
+
+titers_2021_new_raw  <-  left_join(titers_2021_lod_corrected, df_d0_median, by = "isotype_antigen") %>%
+  mutate(
+    MFI_normalized = MFI_lod / overall_median_d0,
+  )
+```
+
+
+### Plot longitudinal data after median based normalisation
+```{r}
+
+#for(select_ia in c('IgE_Total_IU/ML'))
+for(select_ia in unique(titers_2021_new_raw$isotype_antigen))
+{
+plot1 <- titers_2021_new_raw %>%
+  mutate(subject_id = as.character(subject_id)) %>%
+  filter(isotype_antigen == select_ia, planned_day_relative_to_boost < 50) %>%
+    ggplot(aes(x=planned_day_relative_to_boost, y=MFI_normalized, )) +
+      geom_line(aes(group=subject_id),linetype = "dotted") +
+      geom_point() + 
+      labs(x = "Day post boost", y = "MFI Normalised") + 
+      geom_smooth(size = 1) +
+      theme_bw() +
+      theme(strip.background = element_blank(), strip.placement = "outside") +
+      ggtitle(paste0("2020 Antibody titers: ", select_ia)) +
+      scale_y_continuous(trans = 'log2', labels=scaleFUN)
+
+plot(plot1)
+}
+```
+
+### Output/final dataframe for database porpose
+```{r}
+titers_2021_new <- titers_2021_new_raw %>%
+  mutate(ab_titer_normalised = MFI_normalized,
+         ab_titer = MFI_original,
+         unit = 'MFI',
+         is_antigen_specific = FALSE
+         ) %>%
+  select(specimen_id, isotype, antigen, unit, is_antigen_specific, ab_titer, ab_titer_normalised, unit, is_antigen_specific, lower_limit_of_detection) 
+
+#write.table(titers_2021_new,"2021_abtiters_normalised_04052021.csv", row.names = FALSE, sep="\t")
+```
+

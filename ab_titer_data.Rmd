@@ -1,0 +1,228 @@
+---
+title: "CMI-PB ab_titer: Normalisation of plate-wise data"
+output: html_notebook
+---
+
+
+```{r}
+#install.packages("readxl")
+library(readxl)
+library(tidyverse)
+library(MDimNormn)
+```
+
+
+## Read data
+```{r}
+setwd("/home/pramod/Documents/cmipb_project/ab_plate_normalisation")
+
+#input_data_wide = read_tsv("Corrected Data Analysis for Antibody Titers for Tdapshort 3.csv") 
+input_data_wide = read_tsv("Final data FS.csv") 
+#input_data_wide = read_tsv("Data Analysis for all isotypes.csv") 
+control_sample_id = "4091-WC-5"
+
+input_data_long <- input_data_wide %>% 
+   tidyr::pivot_longer(
+     cols = c('PRN','DT','FHA','Fim2/3','TT', 'PT', 'OVA'), 
+     names_to = "antigen", 
+     values_to = "MFI", ) %>% 
+      group_by(antigen)
+
+#input_data_long$MFI_log = log(input_data_long$MFI + 1)
+
+input_data_long <- input_data_long[input_data_long$Isotype %in% c('IgG', 'IgG1','IgG2','IgG3','IgG4'), ]
+
+input_data_control = input_data_long %>%
+            filter(Sample_ID == control_sample_id)
+
+input_data = input_data_long %>%
+            filter(Sample_ID != control_sample_id) 
+
+
+
+table(input_data_control$Sample_ID)
+```
+## Plot control data
+```{r}
+library(scales)
+
+antigen.list <- unique(input_data_control$antigen)
+isotype.list <- unique(input_data_control$Isotype)
+plates.list <- unique(input_data_control$Plate)
+
+
+for(anti in antigen.list)
+{
+  #iso <- "IgG"
+  #anti <- 'Fim2/3'
+  control_df_plot <- input_data_control %>%
+    #filter(., Isotype == iso) %>%
+    filter(., antigen == anti) 
+
+  plot <- ggplot(data = control_df_plot, aes(x = as.factor(Plate), y = (MFI), group=Plate)) +
+    ylab(paste0(anti,' (Control) '))+
+    facet_wrap(~Isotype) +
+    geom_boxplot() +
+    geom_jitter(color="black", size=0.4, alpha=0.9) +
+    scale_y_continuous(trans = log2_trans()) +
+    theme(panel.background = element_rect(fill = "white", colour = "grey50"))
+  
+  plot(plot)
+  
+}
+
+
+#print( control_df_plot)
+
+```
+
+```{r}
+
+for(anti in antigen.list){  
+  #anti <- 'PRN'
+  
+  control_df1 <- input_data_control %>%
+    filter(., antigen == anti) 
+
+  control_df1$datatype <- 'control'
+  
+  data_df1 <- input_data %>%
+    #filter(., Isotype == iso) %>%
+    filter(., antigen == anti) 
+
+  data_df1$datatype <- 'data'
+  
+  df1 <- rbind(control_df1, data_df1 )
+  
+  p <- ggplot(df1, aes(x=Plate, y=MFI)) + 
+    scale_shape_manual(values=c(16, 3)) +
+     ylab(paste0(anti)) +
+    scale_color_manual(values=c('red','grey50')) +
+    geom_point(aes(colour = as.factor(datatype), shape = as.factor(datatype))) +
+    theme(panel.background = element_rect(fill = "white", colour = "grey50")) +
+    scale_y_continuous(trans = log2_trans()) +
+    facet_wrap(~Isotype) 
+  
+  plot(p)
+}
+
+```
+
+```{r}
+input_data_medians <- input_data %>%
+  group_by(Isotype, antigen, Plate) %>%
+  summarise(., median = median(MFI), mean = mean(MFI), n = n())
+
+
+```
+
+```{r}
+
+input_data_new <- list()
+
+for (which.isotype in isotype.list)
+{
+  
+#which.isotype = "IgG1"
+
+input_isotype_control <- input_data_control %>%
+    filter(., Isotype == which.isotype)
+
+input_isotype_data <- input_data %>%
+    filter(., Isotype == which.isotype)
+
+input_data_isotype_new <- list()
+
+for (which.antigen in antigen.list)
+  {
+    #which.antigen = 'DT'
+    
+    ##input_isotype_antigen_control <- input_isotype_control %>%
+     ## filter(., antigen == which.antigen)
+    
+    ##per_plate_avg_control <- input_isotype_antigen_control %>%
+    ##  group_by(Plate) %>%
+    ##  summarize(n(), mean_MFI = mean(MFI, na.rm = TRUE)) 
+    ##all_plate_avg_control <- input_isotype_antigen_control %>%
+    ##  summarize(n(), mean_MFI = mean(MFI, na.rm = TRUE)) 
+    ##
+    ##per_plate_avg_control$per_vs_all_plate_ratio <- (per_plate_avg_control$mean_MFI) / (all_plate_avg_control$mean_MFI)
+    
+    input_isotype_antigen_data <- input_isotype_data %>%
+      filter(., antigen == which.antigen)
+      
+    input_isotype_antigen_data_new <- list()
+    
+    for(which.plate in plates.list)
+    {
+      #which.plate <- 1
+      input_isotype_antigen_data_plate <- input_isotype_antigen_data %>%
+         filter(., Plate == which.plate)
+      
+      ##per_plate_avg_control_plate <- per_plate_avg_control %>%
+      ##       filter(., Plate == which.plate)
+      
+      input_isotype_antigen_data_plate$MFI_new <- (input_isotype_antigen_data_plate$MFI) / (per_plate_avg_control_plate$per_vs_all_plate_ratio)
+      
+      input_isotype_antigen_data_new <- rbind(input_isotype_antigen_data_new, input_isotype_antigen_data_plate)
+      
+    }
+    
+    input_data_isotype_new <- rbind(input_data_isotype_new, input_isotype_antigen_data_new )
+    
+  }
+  
+  input_data_new <- rbind(input_data_new, input_data_isotype_new)
+}
+
+```
+
+
+
+```{r}
+input_data_new %>%
+  group_by(Sample_ID)
+  
+  
+```
+
+
+```{r}
+
+DFInput_grouped1 %>% 
+          summarise(boxplot= list(setNames(boxplot.stats(MFI)$stats,
+                                      c('lower_whisker','lower_hinge','median','upper_hinge','upper_whisker') ) ) ) %>%
+          unnest_wider(boxplot)
+
+
+DFInput_grouped1 %>% 
+  summarise(mean = mean(MFI), SD = sd(MFI), median = median(MFI), min = min(MFI), max = max(MFI))
+
+
+DFInput_grouped1 %>% 
+  summarise(mean = mean(MFI_log), SD = sd(MFI_log), median = median(MFI_log), min = min(MFI_log), max = max(MFI_log))
+
+
+```
+
+```{r}
+
+ggplot(DFInput, aes(x=Plate, y=MFI, group=Plate)) + 
+         geom_boxplot(aes(fill=Plate)) + 
+         facet_grid(~antigen)
+         
+
+
+```
+
+```{r}
+DFInput %>%
+  group_by(antigen) %>%                                                         # for each date
+  mutate(control1 = Result1[Tissue == "Control 1"]) %>%
+  ungroup() %>%                                                              # forget about the grouping
+  mutate(Result1 = ifelse(Tissue == "F", Result1 - control1, Result1)) %>%       # update result values only for rows with tissue =
+  select(Sample:Result2)  
+```
+
+
+

@@ -1,0 +1,136 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+
+  
+#select.isotype_antigen = "IgG1" 
+plot1 <- data_2021 %>%
+  filter(dpb < 50, antigen=='PT') %>%
+  filter(ab_titer > lower_limit_of_detection) %>%
+  ggplot(., aes(y=log(ab_titer), x=dpb)) +
+    ggtitle(paste0("2021 Antibody titers")) +
+    geom_point() + 
+    geom_line(aes(group=subject_id),linetype = "dotted")+
+     geom_smooth() +
+    #theme_ipsum() +
+    facet_wrap(. ~ isotype, scales = "free")
+
+plot(plot1)
+
+plot2 <- data_2020 %>%
+  filter(planned_day_relative_to_boost < 50, antigen %in% c('PT','1% PFA PT'), isotype != 'IgE') %>%
+  filter(ab_titer > lower_limit_of_detection) %>%
+  ggplot(., aes(y=log(ab_titer), x=planned_day_relative_to_boost)) +
+    ggtitle(paste0("2020 Antibody titers")) +
+    geom_point() + 
+    geom_line(aes(group=subject_id),linetype = "dotted")+
+     geom_smooth() +
+    #theme_ipsum() +
+    facet_wrap(. ~ isotype, scales = "free")
+
+plot(plot2)
+
+```
+
+
+```{r}
+count_0 <- data_2021 %>%
+  group_by(isotype_antigen) %>%
+  filter(dpb < 50, ab_titer ==0) %>%
+  count(ab_titer) %>%
+  select(-ab_titer) %>%
+  rename(`#(ab_titer = 0)` = n)
+
+count_0$total <- 210
+count_0$percentage = (count_0$`#(ab_titer = 0)`/ count_0$total) * 100
+
+count_all <- data_2021 %>%
+  group_by(isotype_antigen) %>%
+  select(-ab_titer) %>%
+  filter(dpb < 50) %>%
+  count(isotype_antigen)
+
+```
+
+
+
+
+
+```{r}
+# Specific library
+library(UpSetR)
+library(turner)
+
+data_2021$isotype_antigen <- paste0(data_2021$isotype, "_", data_2021$antigen)
+
+data_upset <- data_2021 %>%
+  filter(isotype != 'IgG') %>%
+  group_by(isotype_antigen) %>%
+  filter(dpb == 14) %>%
+  slice_max(order_by = ab_titer, n = 5) %>%
+  ungroup() %>%
+  group_by(subject_id, isotype_antigen) %>%
+  tally() %>%
+  pivot_wider(names_from = "isotype_antigen", values_from = "n", values_fill = 0) %>%
+  column_to_rownames("subject_id")
+ 
+m = make_comb_mat(data_upset)
+
+UpSet(m)
+
+```
+
+
+```{r}
+data_median <- data_2021 %>%
+  filter(dpb == 14) %>%
+  group_by(isotype_antigen) %>%
+  summarise(median = median(ab_titer))
+
+#data_median$subject_id <- 'median'
+
+data_2021_high_low <- data_2021 %>%
+  filter(dpb == 14) %>%
+  filter(subject_id %in% c('4054', '3947', '3808', '3985')) %>%
+  select(isotype_antigen, ab_titer, subject_id)
+
+data_2021_high_low_median <- left_join(data_2021_high_low, data_median)
+  
+```
+
+```{r}
+df <- data_2021 %>%
+  mutate(
+    group = case_when(
+      subject_id %in% c('4054', '3947') ~ 'high',
+      subject_id %in% c('3808', '3985') ~ 'low',
+       TRUE ~ 'noGroup'
+    )
+    
+  )
+
+
+```
+
+```{r}
+
+for(antigen_which in unique(df$antigen)){
+plot1 <- df %>%
+  filter(dpb < 50, antigen==antigen_which) %>%
+  #filter(ab_titer > lower_limit_of_detection, dpb == 14) %>%
+  ggplot(., aes(y=log(ab_titer), x=dpb, color=group)) +
+    ggtitle(paste0("2021 Antibody titers")) +
+    geom_point() + 
+    geom_line(aes(group=subject_id),linetype = "dotted")+
+     #geom_smooth() +
+    #theme_ipsum() +
+    facet_wrap(. ~ isotype, scales = "free")
+
+plot(plot1)
+
+}
+
+```
